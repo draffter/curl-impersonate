@@ -1,13 +1,13 @@
 #
 # NOTE: THIS DOCKERFILE IS GENERATED FROM "Dockerfile.template" VIA
-# "generate-dockerfiles.sh".
+# `./generate_dockerfiles.sh`
 #
 # PLEASE DO NOT EDIT IT DIRECTLY.
 #
 
 # Python is needed for building libnss.
 # Use it as a common base.
-FROM python:3.10.1-slim-bullseye as builder
+FROM python:3.11-slim-bookworm as builder
 
 WORKDIR /build
 
@@ -18,6 +18,12 @@ RUN apt-get update && \
 # The following are needed because we are going to change some autoconf scripts,
 # both for libnghttp2 and curl.
 RUN apt-get install -y autoconf automake autotools-dev pkg-config libtool
+
+# Dependencies for downloading and building nghttp2
+RUN apt-get install -y bzip2
+
+# Dependencies for downloading and building curl
+RUN apt-get install -y xz-utils
 
 # Dependencies for downloading and building BoringSSL
 RUN apt-get install -y g++ golang-go unzip
@@ -44,7 +50,9 @@ COPY patches/boringssl-*.patch boringssl/
 RUN cd boringssl && \
     for p in $(ls boringssl-*.patch); do patch -p1 < $p; done && \
     mkdir build && cd build && \
-    cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_POSITION_INDEPENDENT_CODE=on -GNinja .. && \
+    cmake \
+        -DCMAKE_C_FLAGS="-Wno-error=array-bounds -Wno-error=stringop-overflow" \
+        -DCMAKE_BUILD_TYPE=Release -DCMAKE_POSITION_INDEPENDENT_CODE=on -GNinja .. && \
     ninja
 
 # Fix the directory structure so that curl can compile against it.
@@ -54,8 +62,8 @@ RUN mkdir boringssl/build/lib && \
     ln -s ../ssl/libssl.a boringssl/build/lib/libssl.a && \
     cp -R boringssl/include boringssl/build
 
-ARG NGHTTP2_VERSION=nghttp2-1.46.0
-ARG NGHTTP2_URL=https://github.com/nghttp2/nghttp2/releases/download/v1.46.0/nghttp2-1.46.0.tar.bz2
+ARG NGHTTP2_VERSION=nghttp2-1.56.0
+ARG NGHTTP2_URL=https://github.com/nghttp2/nghttp2/releases/download/v1.56.0/nghttp2-1.56.0.tar.bz2
 
 # Download nghttp2 for HTTP/2.0 support.
 RUN curl -o ${NGHTTP2_VERSION}.tar.bz2 -L ${NGHTTP2_URL}
@@ -67,7 +75,7 @@ RUN cd ${NGHTTP2_VERSION} && \
     make && make install
 
 # Download curl.
-ARG CURL_VERSION=curl-7.84.0
+ARG CURL_VERSION=curl-8.1.1
 RUN curl -o ${CURL_VERSION}.tar.xz https://curl.se/download/${CURL_VERSION}.tar.xz
 RUN tar xf ${CURL_VERSION}.tar.xz
 
@@ -83,6 +91,7 @@ RUN cd ${CURL_VERSION} && \
     ./configure --prefix=/build/install \
                 --enable-static \
                 --disable-shared \
+                --enable-websockets \
                 --with-nghttp2=/build/${NGHTTP2_VERSION}/installed \
                 --with-brotli=/build/brotli-${BROTLI_VERSION}/build/installed \
                 --with-openssl=/build/boringssl/build \
@@ -137,8 +146,9 @@ RUN chmod +x out/curl_*
 
 # Create a final, minimal image with the compiled binaries
 # only.
-FROM debian:bullseye-slim
-RUN apt-get update && apt-get install -y ca-certificates
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 # Copy curl-impersonate from the builder image
 COPY --from=builder /build/install /usr/local
 # Update the loader's cache

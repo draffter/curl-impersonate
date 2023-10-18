@@ -1,13 +1,13 @@
 #
 # NOTE: THIS DOCKERFILE IS GENERATED FROM "Dockerfile.template" VIA
-# "generate-dockerfiles.sh".
+# `./generate_dockerfiles.sh`
 #
 # PLEASE DO NOT EDIT IT DIRECTLY.
 #
 
 # Python is needed for building libnss.
 # Use it as a common base.
-FROM python:3.10.1-slim-bullseye as builder
+FROM python:3.11-slim-bookworm as builder
 
 WORKDIR /build
 
@@ -18,6 +18,12 @@ RUN apt-get update && \
 # The following are needed because we are going to change some autoconf scripts,
 # both for libnghttp2 and curl.
 RUN apt-get install -y autoconf automake autotools-dev pkg-config libtool
+
+# Dependencies for downloading and building nghttp2
+RUN apt-get install -y bzip2
+
+# Dependencies for downloading and building curl
+RUN apt-get install -y xz-utils
 
 # Dependencies for building libnss
 # See https://firefox-source-docs.mozilla.org/security/nss/build.html#mozilla-projects-nss-building
@@ -40,9 +46,9 @@ RUN cd brotli-${BROTLI_VERSION} && \
 # Needed for building libnss
 RUN pip install gyp-next
 
-ARG NSS_VERSION=nss-3.77
+ARG NSS_VERSION=nss-3.92
 # This tarball is already bundled with nspr, a dependency of libnss.
-ARG NSS_URL=https://ftp.mozilla.org/pub/security/nss/releases/NSS_3_77_RTM/src/nss-3.77-with-nspr-4.32.tar.gz
+ARG NSS_URL=https://ftp.mozilla.org/pub/security/nss/releases/NSS_3_92_RTM/src/nss-3.92-with-nspr-4.35.tar.gz
 
 # Download and compile nss.
 RUN curl -o ${NSS_VERSION}.tar.gz ${NSS_URL}
@@ -50,8 +56,8 @@ RUN tar xf ${NSS_VERSION}.tar.gz && \
     cd ${NSS_VERSION}/nss && \
     ./build.sh -o --disable-tests --static --python=python3
 
-ARG NGHTTP2_VERSION=nghttp2-1.46.0
-ARG NGHTTP2_URL=https://github.com/nghttp2/nghttp2/releases/download/v1.46.0/nghttp2-1.46.0.tar.bz2
+ARG NGHTTP2_VERSION=nghttp2-1.56.0
+ARG NGHTTP2_URL=https://github.com/nghttp2/nghttp2/releases/download/v1.56.0/nghttp2-1.56.0.tar.bz2
 
 # Download nghttp2 for HTTP/2.0 support.
 RUN curl -o ${NGHTTP2_VERSION}.tar.bz2 -L ${NGHTTP2_URL}
@@ -63,7 +69,7 @@ RUN cd ${NGHTTP2_VERSION} && \
     make && make install
 
 # Download curl.
-ARG CURL_VERSION=curl-7.84.0
+ARG CURL_VERSION=curl-8.1.1
 RUN curl -o ${CURL_VERSION}.tar.xz https://curl.se/download/${CURL_VERSION}.tar.xz
 RUN tar xf ${CURL_VERSION}.tar.xz
 
@@ -79,6 +85,7 @@ RUN cd ${CURL_VERSION} && \
     ./configure --prefix=/build/install \
                 --enable-static \
                 --disable-shared \
+                --enable-websockets \
                 --with-nghttp2=/build/${NGHTTP2_VERSION}/installed \
                 --with-brotli=/build/brotli-${BROTLI_VERSION}/build/installed \
                 --with-nss=/build/${NSS_VERSION}/dist/Release \
@@ -133,12 +140,13 @@ RUN chmod +x out/curl_*
 
 # Create a final, minimal image with the compiled binaries
 # only.
-FROM debian:bullseye-slim
-RUN apt-get update && apt-get install -y ca-certificates
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y ca-certificates \
 # curl tries to load the CA certificates for libnss.
 # It loads them from /usr/lib/libnssckbi.so and /usr/lib/libnsspem.so,
 # which are supplied by 'libnss3' and 'nss-plugin-pem' on debian.
-RUN apt-get install -y libnss3 nss-plugin-pem
+    libnss3 nss-plugin-pem \
+    && rm -rf /var/lib/apt/lists/*
 # Copy curl-impersonate from the builder image
 COPY --from=builder /build/install /usr/local
 # Update the loader's cache
